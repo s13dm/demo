@@ -16,6 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.demo.order.dto.UserDeliveryStatusResponse;
 import com.demo.user.dto.CreateUserResponse;
 import com.demo.user.dto.LoginResponse;
 import com.demo.user.dto.UserOrdersResponse;
@@ -133,5 +134,40 @@ class UserControllerTest {
         mockMvc.perform(get("/api/users/1/orders").session(session))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.userId").value(1));
+    }
+
+    @Test
+    void getAdminDeliveries_adminCanView() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute("userId", 1L);
+        session.setAttribute("role", Role.ROLE_ADMIN);
+
+        when(userService.getAllUsersDeliveryStatus())
+                .thenReturn(List.of(
+                        new UserDeliveryStatusResponse(1L, "유저1", "user1@example.com", 0, List.of()),
+                        new UserDeliveryStatusResponse(2L, "유저2", "user2@example.com", 0, List.of())
+                ));
+
+        mockMvc.perform(get("/api/users/admin/deliveries").session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].userName").value("유저1"))
+                .andExpect(jsonPath("$[1].userName").value("유저2"));
+    }
+
+    @Test
+    void getAdminDeliveries_nonAdminForbidden() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute("userId", 1L);
+        session.setAttribute("role", Role.ROLE_USER);
+
+        mockMvc.perform(get("/api/users/admin/deliveries").session(session))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void getAdminDeliveries_notLoggedInForbidden() throws Exception {
+        mockMvc.perform(get("/api/users/admin/deliveries"))
+                .andExpect(status().isForbidden());
     }
 }

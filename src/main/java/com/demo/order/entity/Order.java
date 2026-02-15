@@ -2,6 +2,7 @@ package com.demo.order.entity;
 
 import java.time.LocalDateTime;
 
+import com.demo.product.entity.Product;
 import com.demo.user.entity.User;
 
 import jakarta.persistence.Column;
@@ -28,6 +29,10 @@ public class Order {
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "product_id", nullable = false)
+    private Product product;
+
     @Column(nullable = false)
     private String productName;
 
@@ -47,9 +52,10 @@ public class Order {
     protected Order() {
     }
 
-    public Order(User user, String productName, int quantity, String shippingAddress) {
+    public Order(User user, Product product, int quantity, String shippingAddress) {
         this.user = user;
-        this.productName = productName;
+        this.product = product;
+        this.productName = product.getName();
         this.quantity = quantity;
         this.shippingAddress = shippingAddress;
         this.deliveryStatus = DeliveryStatus.ORDERED;
@@ -62,6 +68,10 @@ public class Order {
 
     public User getUser() {
         return user;
+    }
+
+    public Product getProduct() {
+        return product;
     }
 
     public String getProductName() {

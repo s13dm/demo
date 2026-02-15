@@ -47,7 +47,7 @@ class OrderControllerTest {
                         .content("""
                                 {
                                   "userId": 1,
-                                  "productName": "노트북",
+                                  "productId": 1,
                                   "quantity": 1,
                                   "shippingAddress": "서울시 강남구"
                                 }
@@ -66,5 +66,16 @@ class OrderControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orderId").value(10))
                 .andExpect(jsonPath("$.deliveryStatus").value("SHIPPED"));
+    }
+
+    @Test
+    void cancelOrder_returnsCancelledStatus() throws Exception {
+        when(orderService.cancelOrder(5L))
+                .thenReturn(new DeliveryStatusResponse(5L, DeliveryStatus.CANCELLED, LocalDateTime.parse("2026-01-01T11:00:00")));
+
+        mockMvc.perform(post("/api/orders/5/cancel"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderId").value(5))
+                .andExpect(jsonPath("$.deliveryStatus").value("CANCELLED"));
     }
 }
