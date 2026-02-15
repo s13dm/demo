@@ -10,6 +10,8 @@ import com.demo.common.exception.InvalidCredentialsException;
 import com.demo.common.exception.UnauthorizedException;
 import com.demo.common.exception.UserNotFoundException;
 import com.demo.order.dto.CreateOrderResponse;
+import com.demo.order.dto.DeliveryStatusResponse;
+import com.demo.order.dto.UserDeliveryStatusResponse;
 import com.demo.order.entity.Order;
 import com.demo.order.repository.OrderRepository;
 import com.demo.user.dto.CreateAdminRequest;
@@ -105,5 +107,30 @@ public class UserService {
                 orderResponses.size(),
                 orderResponses
         );
+    }
+
+    @Transactional(readOnly = true)
+    public List<UserDeliveryStatusResponse> getAllUsersDeliveryStatus() {
+        List<User> users = userRepository.findAll();
+
+        return users.stream()
+                .map(user -> {
+                    List<Order> orders = orderRepository.findByUserIdOrderByOrderedAtDesc(user.getId());
+                    List<DeliveryStatusResponse> deliveries = orders.stream()
+                            .map(order -> new DeliveryStatusResponse(
+                                    order.getId(),
+                                    order.getDeliveryStatus(),
+                                    order.getOrderedAt()
+                            ))
+                            .toList();
+                    return new UserDeliveryStatusResponse(
+                            user.getId(),
+                            user.getName(),
+                            user.getEmail(),
+                            deliveries.size(),
+                            deliveries
+                    );
+                })
+                .toList();
     }
 }

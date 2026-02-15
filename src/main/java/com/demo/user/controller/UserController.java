@@ -1,5 +1,6 @@
 package com.demo.user.controller;
 
+import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.HttpStatus;
@@ -18,6 +19,7 @@ import com.demo.user.dto.CreateUserResponse;
 import com.demo.user.dto.LoginRequest;
 import com.demo.user.dto.LoginResponse;
 import com.demo.user.dto.UserOrdersResponse;
+import com.demo.order.dto.UserDeliveryStatusResponse;
 import com.demo.user.entity.Role;
 import com.demo.user.service.UserService;
 
@@ -74,5 +76,21 @@ public class UserController {
         }
 
         return userService.getUserOrders(userId);
+    }
+
+    @GetMapping("/admin/deliveries")
+    public List<UserDeliveryStatusResponse> getAllUsersDeliveryStatus(HttpSession session) {
+        Long sessionUserId = (Long) session.getAttribute("userId");
+        Role sessionRole = (Role) session.getAttribute("role");
+
+        if (sessionUserId == null) {
+            throw new UnauthorizedException();
+        }
+
+        if (sessionRole != Role.ROLE_ADMIN) {
+            throw new UnauthorizedException("어드민만 접근할 수 있습니다.");
+        }
+
+        return userService.getAllUsersDeliveryStatus();
     }
 }

@@ -46,4 +46,9 @@ public class OrderController {
     ) {
         return orderService.updateDeliveryStatus(orderId, request);
     }
+
+    @PostMapping("/{orderId}/cancel")
+    public DeliveryStatusResponse cancelOrder(@PathVariable Long orderId) {
+        return orderService.cancelOrder(orderId);
+    }
 }
