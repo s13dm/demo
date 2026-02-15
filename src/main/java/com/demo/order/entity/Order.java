@@ -2,6 +2,8 @@ package com.demo.order.entity;
 
 import java.time.LocalDateTime;
 
+import com.demo.user.entity.User;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

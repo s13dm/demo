@@ -1,8 +1,8 @@
-package com.demo.order.repository;
+package com.demo.user.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 
-import com.demo.order.entity.User;
+import com.demo.user.entity.User;
 
 public interface UserRepository extends JpaRepository<User, Long> {
 }
