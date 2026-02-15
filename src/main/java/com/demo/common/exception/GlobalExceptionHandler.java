@@ -23,6 +23,24 @@ public class GlobalExceptionHandler {
         return Map.of("message", ex.getMessage());
     }
 
+    @ExceptionHandler(InvalidCredentialsException.class)
+    @ResponseStatus(HttpStatus.UNAUTHORIZED)
+    public Map<String, String> handleInvalidCredentials(InvalidCredentialsException ex) {
+        return Map.of("message", ex.getMessage());
+    }
+
+    @ExceptionHandler(UnauthorizedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public Map<String, String> handleUnauthorized(UnauthorizedException ex) {
+        return Map.of("message", ex.getMessage());
+    }
+
+    @ExceptionHandler(DuplicateEmailException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public Map<String, String> handleDuplicateEmail(DuplicateEmailException ex) {
+        return Map.of("message", ex.getMessage());
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, String> handleValidationError(MethodArgumentNotValidException ex) {
