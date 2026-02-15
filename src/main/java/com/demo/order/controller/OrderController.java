@@ -2,8 +2,8 @@ package com.demo.order.controller;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,46 +12,38 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.demo.order.dto.CreateOrderRequest;
 import com.demo.order.dto.CreateOrderResponse;
-import com.demo.order.dto.CreateUserRequest;
-import com.demo.order.dto.CreateUserResponse;
 import com.demo.order.dto.DeliveryStatusResponse;
 import com.demo.order.dto.UpdateDeliveryStatusRequest;
-import com.demo.order.service.OrderDeliveryService;
+import com.demo.order.service.OrderService;
 
 import jakarta.validation.Valid;
 
 @RestController
-@RequestMapping("/api")
-public class OrderDeliveryController {
+@RequestMapping("/api/orders")
+public class OrderController {
 
-    private final OrderDeliveryService orderDeliveryService;
+    private final OrderService orderService;
 
-    public OrderDeliveryController(OrderDeliveryService orderDeliveryService) {
-        this.orderDeliveryService = orderDeliveryService;
+    public OrderController(OrderService orderService) {
+        this.orderService = orderService;
     }
 
-    @PostMapping("/users")
-    @ResponseStatus(HttpStatus.CREATED)
-    public CreateUserResponse registerUser(@Valid @RequestBody CreateUserRequest request) {
-        return orderDeliveryService.registerUser(request);
-    }
-
-    @PostMapping("/orders")
+    @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public CreateOrderResponse placeOrder(@Valid @RequestBody CreateOrderRequest request) {
-        return orderDeliveryService.placeOrder(request);
+        return orderService.placeOrder(request);
     }
 
-    @GetMapping("/orders/{orderId}/delivery")
+    @GetMapping("/{orderId}/delivery")
     public DeliveryStatusResponse checkDeliveryStatus(@PathVariable Long orderId) {
-        return orderDeliveryService.checkDeliveryStatus(orderId);
+        return orderService.checkDeliveryStatus(orderId);
     }
 
-    @PatchMapping("/orders/{orderId}/delivery")
+    @PatchMapping("/{orderId}/delivery")
     public DeliveryStatusResponse updateDeliveryStatus(
             @PathVariable Long orderId,
             @Valid @RequestBody UpdateDeliveryStatusRequest request
     ) {
-        return orderDeliveryService.updateDeliveryStatus(orderId, request);
+        return orderService.updateDeliveryStatus(orderId, request);
     }
 }

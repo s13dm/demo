@@ -1,4 +1,4 @@
-package com.demo.order.dto;
+package com.demo.user.dto;
 
 public record CreateUserResponse(
         Long userId,
