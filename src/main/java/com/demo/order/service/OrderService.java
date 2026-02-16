@@ -37,7 +37,13 @@ public class OrderService {
         User user = userRepository.findById(request.userId())
                 .orElseThrow(() -> new UserNotFoundException(request.userId()));
 
-        Product product = productRepository.findById(request.productId())
+        /*
+         * 비관적 락(PESSIMISTIC_WRITE)으로 상품을 조회한다.
+         * SELECT ... FOR UPDATE가 실행되어, 동일 상품에 대한 동시 주문 요청이
+         * 순차적으로 처리되도록 보장한다.
+         * → 재고 차감의 정합성을 보장하여 초과 판매(over-selling)를 방지한다.
+         */
+        Product product = productRepository.findByIdWithPessimisticLock(request.productId())
                 .orElseThrow(() -> new ProductNotFoundException(request.productId()));
 
         if (product.getStock() < request.quantity()) {
