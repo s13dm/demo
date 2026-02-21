@@ -37,5 +37,5 @@
   "deliveryStatus": "SHIPPED"
 }
 ```
-
+https://fire-nose-a00.notion.site/30ce664d31b280d9bb91ceedfec4ed6c
 
