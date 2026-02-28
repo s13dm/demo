@@ -491,6 +491,274 @@ public class GlobalExceptionHandler {
 
 ## 5. 테스트
 
+### 테스트 전략 개요
+
+이 프로젝트에서는 두 가지 계층의 테스트를 작성합니다.
+
+| 구분 | 어노테이션 | 대상 | DB | Mock 여부 |
+|------|-----------|------|----|-----------|
+| 컨트롤러 테스트 | `@WebMvcTest` | HTTP 요청/응답, 직렬화 | 없음 | Service를 `@MockBean`으로 목 처리 |
+| 서비스 통합 테스트 | `@SpringBootTest` | 비즈니스 로직, DB 연동 | H2 인메모리 | 실제 빈 사용 (`@Autowired`) |
+
+---
+
+### 서비스 통합 테스트 (Service Integration Test)
+
+서비스 테스트는 실제 DB와 연동하여 **비즈니스 로직이 올바르게 동작하는지** 검증합니다. 컨트롤러 테스트가 HTTP 레이어에 집중하는 것과 달리, 서비스 테스트는 **데이터 저장/조회/변경이 의도대로 이루어지는지**, 그리고 **예외 조건이 올바르게 처리되는지**에 집중합니다.
+
+#### 핵심 어노테이션
+
+```java
+@SpringBootTest   // 전체 Spring 컨텍스트 로드 (실제 빈 사용)
+@Transactional    // 각 테스트 후 롤백 → 테스트 간 데이터 격리
+class OrderServiceIntegrationTest {
+
+    @Autowired    // 실제 빈 주입 (Mock 아님)
+    private OrderService orderService;
+}
+```
+
+**`@SpringBootTest`**
+- 애플리케이션 전체 컨텍스트를 로드합니다.
+- Service, Repository, Entity 등 모든 빈이 실제로 동작합니다.
+- `@WebMvcTest`와 달리 HTTP 레이어 없이 서비스 레이어를 직접 호출합니다.
+
+**`@Transactional` (테스트용)**
+- 각 `@Test` 메서드가 끝나면 자동으로 **롤백**됩니다.
+- 테스트가 DB에 저장한 데이터가 다음 테스트에 영향을 주지 않아 **테스트 격리**가 보장됩니다.
+- `@BeforeEach`에서 저장한 데이터도 동일한 트랜잭션 내에서 동작하므로 롤백 범위에 포함됩니다.
+
+#### 테스트 DB 설정
+
+서비스 테스트는 실제 MySQL 대신 **H2 인메모리 DB**를 사용합니다. `src/test/resources/application.yml`에서 테스트 전용 설정을 오버라이드합니다.
+
+```yaml
+# src/test/resources/application.yml
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MYSQL   # MySQL 호환 모드
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop              # 테스트 시작 시 스키마 생성, 종료 시 삭제
+```
+
+- `MODE=MYSQL`: H2가 MySQL 문법을 흉내 내도록 설정합니다.
+- `create-drop`: 테스트 컨텍스트 시작 시 테이블을 새로 만들고, 종료 시 전부 삭제합니다.
+- 외부 DB 없이 어디서든 테스트를 실행할 수 있어 CI/CD 환경에 적합합니다.
+
+#### `@BeforeEach`로 공통 데이터 준비
+
+각 테스트마다 필요한 기반 데이터(유저, 상품)를 `@BeforeEach`에서 세팅합니다.
+
+```java
+private Long userId;
+private Long productId;
+
+@BeforeEach
+void setUp() {
+    CreateUserResponse user = userService.registerUser(
+            new CreateUserRequest("주문자", "order-test@example.com", "pass1234")
+    );
+    userId = user.userId();
+
+    ProductResponse product = productService.addProduct(
+            new CreateProductRequest("맥북 프로", 2500000, 100)
+    );
+    productId = product.productId();
+}
+```
+
+- 직접 Repository를 호출하지 않고 **Service를 통해 데이터를 생성**합니다. 이렇게 하면 서비스 레이어의 검증 로직도 함께 거쳐 더 현실적인 테스트 환경을 만들 수 있습니다.
+- 생성된 ID를 인스턴스 변수에 저장하여 각 `@Test`에서 재사용합니다.
+
+#### `@Nested` + `@DisplayName`으로 테스트 구조화
+
+```java
+@Nested
+@DisplayName("주문 생성 (placeOrder)")
+class PlaceOrderTest {
+
+    @Test
+    @DisplayName("정상적인 주문 생성 → 주문 정보 반환 및 재고 감소")
+    void placeOrder_success() { ... }
+
+    @Test
+    @DisplayName("존재하지 않는 유저로 주문 → UserNotFoundException")
+    void placeOrder_userNotFound_throwsException() { ... }
+
+    @Test
+    @DisplayName("재고 부족 시 주문 → InsufficientStockException")
+    void placeOrder_insufficientStock_throwsException() { ... }
+}
+```
+
+- `@Nested`: 메서드 단위로 테스트를 그룹화합니다. 하나의 서비스 메서드에 대한 성공/실패 케이스를 묶어서 관리합니다.
+- `@DisplayName`: 테스트 실행 결과에 표시될 한글 설명을 붙입니다. `메서드명 → 기대 결과` 형식으로 작성하면 리포트만 봐도 어떤 케이스인지 파악할 수 있습니다.
+
+#### 성공 케이스 — 반환값 + 부수 효과 모두 검증
+
+서비스 테스트의 특징은 **반환값**뿐 아니라 **DB 상태 변화(부수 효과)**까지 함께 검증할 수 있다는 점입니다.
+
+```java
+@Test
+@DisplayName("정상적인 주문 생성 → 주문 정보 반환 및 재고 감소")
+void placeOrder_success() {
+    CreateOrderRequest request = new CreateOrderRequest(
+            userId, productId, 1, "서울시 강남구 테헤란로 123"
+    );
+
+    CreateOrderResponse response = orderService.placeOrder(request);
+
+    // 반환값 검증
+    assertThat(response.orderId()).isNotNull();
+    assertThat(response.deliveryStatus()).isEqualTo(DeliveryStatus.ORDERED);
+
+    // 부수 효과 검증: 재고가 1 감소했는지 확인
+    ProductResponse updatedProduct = productService.getProduct(productId);
+    assertThat(updatedProduct.stock()).isEqualTo(99);
+}
+```
+
+컨트롤러 테스트는 Service가 Mock이라 재고 감소 같은 부수 효과를 검증할 수 없습니다. 서비스 테스트에서는 **실제 DB에 반영된 결과**를 다시 조회하여 검증합니다.
+
+#### 예외 케이스 — `assertThatThrownBy`
+
+```java
+@Test
+@DisplayName("재고 부족 시 주문 → InsufficientStockException")
+void placeOrder_insufficientStock_throwsException() {
+    CreateOrderRequest request = new CreateOrderRequest(
+            userId, productId, 999, "서울시 강남구"
+    );
+
+    assertThatThrownBy(() -> orderService.placeOrder(request))
+            .isInstanceOf(InsufficientStockException.class);
+}
+```
+
+- `assertThatThrownBy(() -> ...)`: AssertJ 방식의 예외 검증으로, 람다 안의 코드를 실행했을 때 예외가 발생하는지 확인합니다.
+- `.isInstanceOf(SomeException.class)`: 발생한 예외의 타입을 검증합니다.
+- JUnit의 `assertThrows`보다 가독성이 높고 체이닝이 자유롭습니다.
+
+#### 상태 전이 검증
+
+서비스 테스트에서는 여러 단계를 순서대로 실행하며 **상태 흐름 전체**를 검증할 수 있습니다.
+
+```java
+@Test
+@DisplayName("ORDERED → PREPARING → SHIPPED → DELIVERED 순차 변경")
+void updateDeliveryStatus_fullFlow_success() {
+    DeliveryStatusResponse step1 = orderService.updateDeliveryStatus(
+            orderId, new UpdateDeliveryStatusRequest(DeliveryStatus.PREPARING)
+    );
+    assertThat(step1.deliveryStatus()).isEqualTo(DeliveryStatus.PREPARING);
+
+    DeliveryStatusResponse step2 = orderService.updateDeliveryStatus(
+            orderId, new UpdateDeliveryStatusRequest(DeliveryStatus.SHIPPED)
+    );
+    assertThat(step2.deliveryStatus()).isEqualTo(DeliveryStatus.SHIPPED);
+
+    DeliveryStatusResponse step3 = orderService.updateDeliveryStatus(
+            orderId, new UpdateDeliveryStatusRequest(DeliveryStatus.DELIVERED)
+    );
+    assertThat(step3.deliveryStatus()).isEqualTo(DeliveryStatus.DELIVERED);
+}
+```
+
+같은 트랜잭션 안에서 순차적으로 상태를 변경하고 각 단계에서 결과를 검증합니다.
+
+#### 주문 취소 — 재고 복구까지 검증
+
+```java
+@Test
+@DisplayName("ORDERED 상태 주문 취소 → CANCELLED 상태 + 재고 복구")
+void cancelOrder_success() {
+    // 취소 전 재고 기록
+    ProductResponse beforeCancel = productService.getProduct(productId);
+    int stockBeforeCancel = beforeCancel.stock();
+
+    DeliveryStatusResponse response = orderService.cancelOrder(orderId);
+
+    assertThat(response.deliveryStatus()).isEqualTo(DeliveryStatus.CANCELLED);
+
+    // 재고가 주문 수량(3)만큼 복구됐는지 확인
+    ProductResponse afterCancel = productService.getProduct(productId);
+    assertThat(afterCancel.stock()).isEqualTo(stockBeforeCancel + 3);
+}
+```
+
+취소 전후 재고를 직접 조회하여 수량이 정확히 복구되었는지 수치로 검증합니다.
+
+---
+
+### 동시성 테스트 (Concurrency Test)
+
+비관적 락(Pessimistic Lock) 같은 동시성 제어 로직은 일반 서비스 테스트로는 검증할 수 없습니다. 여러 스레드가 동시에 요청을 보내는 상황을 직접 만들어야 합니다.
+
+#### `@Transactional`을 붙이지 않는 이유
+
+```java
+@SpringBootTest
+// @Transactional 없음 — 의도적으로 제거
+class OrderConcurrencyTest {
+```
+
+동시성 테스트에 `@Transactional`을 붙이면 **모든 스레드가 하나의 트랜잭션 안에서 실행**됩니다. 이 경우 락 경합이 발생하지 않아 동시성 문제를 재현할 수 없습니다. 각 스레드가 **독립적인 트랜잭션**을 가져야 비관적 락의 효과를 검증할 수 있습니다.
+
+대신 테스트가 끝난 뒤 데이터가 DB에 남으므로, H2의 `create-drop` 설정으로 테스트 컨텍스트 종료 시 전체 스키마가 삭제되어 정리됩니다.
+
+#### CountDownLatch로 동시 실행 제어
+
+```java
+int threadCount = 100;
+ExecutorService executorService = Executors.newFixedThreadPool(32);
+CountDownLatch latch = new CountDownLatch(threadCount);
+
+AtomicInteger successCount = new AtomicInteger(0);
+AtomicInteger failCount = new AtomicInteger(0);
+
+for (int i = 0; i < threadCount; i++) {
+    executorService.submit(() -> {
+        try {
+            orderService.placeOrder(new CreateOrderRequest(...));
+            successCount.incrementAndGet();
+        } catch (Exception e) {
+            failCount.incrementAndGet();
+        } finally {
+            latch.countDown();   // 작업 완료 신호
+        }
+    });
+}
+
+latch.await();           // 모든 스레드가 완료될 때까지 대기
+executorService.shutdown();
+```
+
+- **`CountDownLatch`**: 지정한 카운트(여기서는 100)가 0이 될 때까지 `await()`을 호출한 스레드를 대기시킵니다. 각 작업이 끝날 때 `countDown()`으로 카운트를 줄여 모든 스레드의 완료를 기다립니다.
+- **`ExecutorService`**: 스레드 풀을 관리합니다. `newFixedThreadPool(32)`는 최대 32개 스레드를 동시에 실행합니다.
+- **`AtomicInteger`**: 여러 스레드에서 안전하게 카운트를 증가시키기 위한 원자적(atomic) 정수입니다. 일반 `int`를 사용하면 동시 쓰기로 인해 값이 누락될 수 있습니다.
+
+#### 동시성 테스트 검증
+
+```java
+// 재고 100개, 스레드 100개 → 모두 성공해야 함
+assertThat(successCount.get()).isEqualTo(100);
+assertThat(failCount.get()).isZero();
+assertThat(result.stock()).isZero();
+
+// 재고 10개, 스레드 100개 → 정확히 10개만 성공
+assertThat(successCount.get()).isEqualTo(10);
+assertThat(failCount.get()).isEqualTo(90);
+assertThat(result.stock()).isZero();
+```
+
+비관적 락이 없으면 동시 읽기로 인해 재고보다 더 많은 주문이 성공하는 **초과 판매(over-selling)**가 발생합니다. 비관적 락(`SELECT ... FOR UPDATE`)이 정상 동작하면 재고 수량 정확히 만큼만 성공하고 나머지는 `InsufficientStockException`으로 실패합니다.
+
+---
+
 ### UserControllerTest
 
 ```java
@@ -587,4 +855,6 @@ class OrderControllerTest {
 | 검증 | Jakarta Bean Validation (`@NotBlank`, `@Email`, `@Min`) |
 | 예외 처리 | 커스텀 예외 + `@RestControllerAdvice` 전역 핸들러 |
 | 트랜잭션 | 클래스 레벨 `@Transactional`, 조회는 `readOnly = true` |
-| 테스트 | `@WebMvcTest` + MockMvc로 컨트롤러 슬라이스 테스트 |
+| 컨트롤러 테스트 | `@WebMvcTest` + `MockMvc`로 HTTP 요청/응답 검증 |
+| 서비스 통합 테스트 | `@SpringBootTest` + H2로 비즈니스 로직 및 DB 연동 검증 |
+| 동시성 테스트 | `@SpringBootTest` (트랜잭션 없음) + `CountDownLatch`로 락 정합성 검증 |
