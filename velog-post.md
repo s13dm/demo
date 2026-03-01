@@ -524,9 +524,38 @@ class OrderServiceIntegrationTest {
 - `@WebMvcTest`와 달리 HTTP 레이어 없이 서비스 레이어를 직접 호출합니다.
 
 **`@Transactional` (테스트용)**
-- 각 `@Test` 메서드가 끝나면 자동으로 **롤백**됩니다.
-- 테스트가 DB에 저장한 데이터가 다음 테스트에 영향을 주지 않아 **테스트 격리**가 보장됩니다.
-- `@BeforeEach`에서 저장한 데이터도 동일한 트랜잭션 내에서 동작하므로 롤백 범위에 포함됩니다.
+
+프로덕션 코드의 `@Transactional`과 **동작 방식이 다릅니다.**
+
+```
+프로덕션 @Transactional
+  → 메서드 정상 종료 시 커밋 (DB에 영구 반영)
+  → 예외 발생 시 롤백
+
+테스트 클래스의 @Transactional
+  → 테스트 메서드 종료 후 항상 롤백 (커밋하지 않음)
+```
+
+이 동작 덕분에 테스트 간 데이터 격리가 보장됩니다:
+
+```
+@BeforeEach → setUp()
+  └─ userService.registerUser() → DB에 유저 저장
+  └─ productService.addProduct() → DB에 상품 저장
+
+@Test → placeOrder_success()
+  └─ orderService.placeOrder() → 주문 저장, 재고 감소
+  └─ assert 검증
+
+--- 테스트 종료 → 자동 롤백 ---
+DB 원상복구: 유저, 상품, 주문 모두 사라짐
+
+@Test → placeOrder_insufficientStock_throwsException()
+  └─ @BeforeEach 재실행 → 유저, 상품을 새로 생성
+  └─ 이전 테스트의 흔적 없음 → 깨끗한 상태 보장
+```
+
+롤백이 없으면 테스트마다 데이터가 누적되어 "이미 존재하는 이메일" 오류 등으로 테스트가 서로 간섭합니다. `@BeforeEach`에서 저장한 데이터도 동일한 트랜잭션 내에서 동작하므로 롤백 범위에 함께 포함됩니다.
 
 #### 테스트 DB 설정
 
@@ -600,7 +629,15 @@ class PlaceOrderTest {
 
 #### 성공 케이스 — 반환값 + 부수 효과 모두 검증
 
-서비스 테스트의 특징은 **반환값**뿐 아니라 **DB 상태 변화(부수 효과)**까지 함께 검증할 수 있다는 점입니다.
+"부수 효과"란 메서드가 **반환값 외에 추가로 일으키는 상태 변화**입니다.
+
+```
+placeOrder() 실행 결과
+ ├─ 반환값:   CreateOrderResponse (orderId, deliveryStatus ...)
+ └─ 부수 효과: 상품 재고 100 → 99 감소 (DB 상태 변화)
+```
+
+반환값만 검증하면 "주문 응답 객체가 잘 만들어졌다"는 것만 알 수 있습니다. **재고가 실제로 줄었는지는 별도로 조회해야** 합니다.
 
 ```java
 @Test
@@ -612,17 +649,31 @@ void placeOrder_success() {
 
     CreateOrderResponse response = orderService.placeOrder(request);
 
-    // 반환값 검증
+    // 1) 반환값 검증
     assertThat(response.orderId()).isNotNull();
     assertThat(response.deliveryStatus()).isEqualTo(DeliveryStatus.ORDERED);
 
-    // 부수 효과 검증: 재고가 1 감소했는지 확인
+    // 2) 부수 효과 검증 — 주문 후 DB에서 재고를 다시 조회해서 확인
     ProductResponse updatedProduct = productService.getProduct(productId);
-    assertThat(updatedProduct.stock()).isEqualTo(99);
+    assertThat(updatedProduct.stock()).isEqualTo(99);  // 100 → 99
 }
 ```
 
-컨트롤러 테스트는 Service가 Mock이라 재고 감소 같은 부수 효과를 검증할 수 없습니다. 서비스 테스트에서는 **실제 DB에 반영된 결과**를 다시 조회하여 검증합니다.
+컨트롤러 테스트는 Service가 `@MockBean`이라 실제 로직이 실행되지 않으므로 재고 감소 같은 부수 효과를 검증할 수 없습니다. 서비스 테스트에서는 **실제 DB에 반영된 결과**를 다시 조회하여 검증합니다.
+
+주문 취소 테스트에서 부수 효과는 더 명확합니다:
+
+```java
+// 취소 "전" 재고를 먼저 기록
+ProductResponse beforeCancel = productService.getProduct(productId);
+int stockBeforeCancel = beforeCancel.stock();   // 예: 97
+
+orderService.cancelOrder(orderId);              // 수량 3개짜리 주문 취소
+
+// 취소 "후" 재고가 정확히 3만큼 늘었는지 확인
+ProductResponse afterCancel = productService.getProduct(productId);
+assertThat(afterCancel.stock()).isEqualTo(stockBeforeCancel + 3);  // 97 → 100
+```
 
 #### 예외 케이스 — `assertThatThrownBy`
 
@@ -706,40 +757,85 @@ void cancelOrder_success() {
 class OrderConcurrencyTest {
 ```
 
-동시성 테스트에 `@Transactional`을 붙이면 **모든 스레드가 하나의 트랜잭션 안에서 실행**됩니다. 이 경우 락 경합이 발생하지 않아 동시성 문제를 재현할 수 없습니다. 각 스레드가 **독립적인 트랜잭션**을 가져야 비관적 락의 효과를 검증할 수 있습니다.
+동시성 테스트에 `@Transactional`을 붙이면 **모든 스레드가 하나의 트랜잭션 안에서 실행**됩니다. 비관적 락은 트랜잭션 간의 경합을 막는 장치인데, 같은 트랜잭션이면 락 경합 자체가 발생하지 않아 동시성 문제를 재현할 수 없습니다.
 
-대신 테스트가 끝난 뒤 데이터가 DB에 남으므로, H2의 `create-drop` 설정으로 테스트 컨텍스트 종료 시 전체 스키마가 삭제되어 정리됩니다.
+```
+@Transactional 있을 때 (잘못된 설정)
+  메인 트랜잭션 시작
+   ├─ 스레드 1 → placeOrder() → 같은 트랜잭션 내에서 실행
+   ├─ 스레드 2 → placeOrder() → 같은 트랜잭션 내에서 실행
+   └─ 락 경합 없음 → 동시성 문제 재현 불가
+
+@Transactional 없을 때 (올바른 설정)
+   ├─ 스레드 1 → 자체 트랜잭션 시작 → SELECT FOR UPDATE → 커밋
+   ├─ 스레드 2 → 자체 트랜잭션 시작 → SELECT FOR UPDATE → 락 대기 → 커밋
+   └─ 트랜잭션 간 경합 발생 → 비관적 락 효과 검증 가능
+```
+
+`@Transactional`을 빼면 테스트가 끝난 뒤 데이터가 DB에 남습니다. H2의 `create-drop` 설정이 테스트 컨텍스트 종료 시 전체 스키마를 삭제해 정리합니다.
 
 #### CountDownLatch로 동시 실행 제어
 
+`ExecutorService.submit()`은 작업을 스레드 풀에 넘기고 **즉시 반환**합니다. 아무 동기화가 없으면 100개 스레드가 다 끝나기 전에 `assert`가 실행됩니다.
+
 ```java
-int threadCount = 100;
-ExecutorService executorService = Executors.newFixedThreadPool(32);
-CountDownLatch latch = new CountDownLatch(threadCount);
+// CountDownLatch 없는 경우 (잘못된 예)
+for (int i = 0; i < 100; i++) {
+    executorService.submit(() -> orderService.placeOrder(...));
+}
+// 이 시점에 스레드들이 아직 실행 중일 수 있음
+assertThat(result.stock()).isZero();  // 틀린 결과가 나올 수 있음
+```
 
-AtomicInteger successCount = new AtomicInteger(0);
-AtomicInteger failCount = new AtomicInteger(0);
+`CountDownLatch`는 지정한 카운트가 0이 될 때까지 `await()`을 호출한 스레드를 블로킹합니다:
 
-for (int i = 0; i < threadCount; i++) {
+```java
+CountDownLatch latch = new CountDownLatch(100);  // 카운터: 100
+
+for (int i = 0; i < 100; i++) {
     executorService.submit(() -> {
         try {
-            orderService.placeOrder(new CreateOrderRequest(...));
+            orderService.placeOrder(...);
             successCount.incrementAndGet();
         } catch (Exception e) {
             failCount.incrementAndGet();
         } finally {
-            latch.countDown();   // 작업 완료 신호
-        }
+            latch.countDown();  // 성공/실패 여부와 무관하게 카운터 -1
+        }                       // 100 → 99 → 98 → ... → 0
     });
 }
 
-latch.await();           // 모든 스레드가 완료될 때까지 대기
-executorService.shutdown();
+latch.await();  // 카운터가 0이 될 때까지 메인 스레드 블로킹
+                // = 100개 스레드 모두 완료될 때까지 대기
+
+// 여기부터는 모든 스레드가 끝난 것이 보장됨
+assertThat(result.stock()).isZero();  // 안전하게 검증 가능
 ```
 
-- **`CountDownLatch`**: 지정한 카운트(여기서는 100)가 0이 될 때까지 `await()`을 호출한 스레드를 대기시킵니다. 각 작업이 끝날 때 `countDown()`으로 카운트를 줄여 모든 스레드의 완료를 기다립니다.
-- **`ExecutorService`**: 스레드 풀을 관리합니다. `newFixedThreadPool(32)`는 최대 32개 스레드를 동시에 실행합니다.
-- **`AtomicInteger`**: 여러 스레드에서 안전하게 카운트를 증가시키기 위한 원자적(atomic) 정수입니다. 일반 `int`를 사용하면 동시 쓰기로 인해 값이 누락될 수 있습니다.
+`countDown()`을 `finally`에 넣는 이유는 예외가 발생해도 반드시 카운트를 감소시켜야 하기 때문입니다. `try` 블록에 넣으면 예외 발생 시 `countDown()`이 호출되지 않아 `latch.await()`이 영원히 블로킹됩니다.
+
+#### AtomicInteger — 스레드 안전한 카운터
+
+여러 스레드가 동시에 `int` 변수를 읽고 쓰면 값이 손실됩니다:
+
+```
+일반 int successCount = 0 일 때
+
+스레드 A: successCount 읽기 → 5
+스레드 B: successCount 읽기 → 5   ← A가 아직 저장하기 전에 읽음
+스레드 A: 5 + 1 = 6, 저장
+스레드 B: 5 + 1 = 6, 저장         ← B의 증가분이 A에 덮어씌워짐
+결과: 2번 증가했는데 6만 반영 → 값 손실
+```
+
+`AtomicInteger`는 읽기-증가-저장을 **원자적(CAS, Compare-And-Swap)**으로 처리해서 중간에 끊기지 않습니다:
+
+```java
+AtomicInteger successCount = new AtomicInteger(0);
+successCount.incrementAndGet();  // 읽기 + 증가 + 저장이 한 번에 (분리 불가)
+```
+
+`AtomicInteger`가 정확하지 않으면 비관적 락이 실제로 동작해서 10개만 성공했어도 `successCount`가 9나 11로 읽힐 수 있어 **테스트 자체를 신뢰할 수 없습니다.**
 
 #### 동시성 테스트 검증
 
